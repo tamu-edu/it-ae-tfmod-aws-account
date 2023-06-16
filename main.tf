@@ -67,7 +67,7 @@ data "azuread_users" "owners" {
 #
 resource "aws_organizations_account" "account" {
   provider = aws.root_acct #creates linked account THROUGH aws organizations - the resource lives in master payer
-  name      = "${var.json_data.resource_name}"
+  name      = "${var.account_name}"
   email     = var.email
   # There is no AWS Organizations API for reading role_name
   role_name = "OrganizationAccountAccessRole"
