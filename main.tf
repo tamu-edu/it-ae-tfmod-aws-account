@@ -9,6 +9,10 @@ terraform {
       source  = "hashicorp/azuread"
       version = "~> 1.6"
     }
+    kion = {
+      source = "Kionsoftware/Kion"
+      version = "0.3.0"
+    }
   }
 }
 
@@ -89,16 +93,16 @@ resource "azuread_group" "admins_group" {
   display_name = "${var.account_name}-admins"
   owners  = concat(data.azuread_users.owners.object_ids, [var.aip_sp_cicd_aws_onboarding_object_id])
 
-  provisioner "local-exec" {
-    command = <<EOT
-      sleep 30 # allow time for object to come alive
-      az rest --method POST \
-              --uri https://graph.microsoft.com/v1.0/servicePrincipals/${ var.aws_sso_app.object_id }/appRoleAssignedTo \
-              --body '{"appRoleId":   "${ var.aws_sso_app.approle_id} ", "principalId": "${ self.object_id }", "resourceId":  "${ var.aws_sso_app.object_id }"}' \
-              --headers 'Content-Type=application/json' \
-              --query '{ "id": id }'
-    EOT
-  }
+  # provisioner "local-exec" {
+  #   command = <<EOT
+  #     sleep 30 # allow time for object to come alive
+  #     az rest --method POST \
+  #             --uri https://graph.microsoft.com/v1.0/servicePrincipals/${ var.aws_sso_app.object_id }/appRoleAssignedTo \
+  #             --body '{"appRoleId":   "${ var.aws_sso_app.approle_id} ", "principalId": "${ self.object_id }", "resourceId":  "${ var.aws_sso_app.object_id }"}' \
+  #             --headers 'Content-Type=application/json' \
+  #             --query '{ "id": id }'
+  #   EOT
+  # }
 
   lifecycle {
     ignore_changes = [members, description, owners]
@@ -231,15 +235,115 @@ resource "aws_ssoadmin_account_assignment" "aws_sso_group_id_secassment" {
 # Kion Project (WIP)
 ######################
 
-#data "kion_ou" "master_ou"{
-#  filter = {
-#    name = "TAMU"
-#  }
-#}
+# workflow order:
+# 1. create user_group in Kion
+# 2. create saml_group_association of Azure AD group (depends on: user_group)
+#     3. create project (depends on: user_group)
+#       4. import account (can only be done manually or via API call, no Terraform provider resource available)
+#         5. link account to project (depends on: project)(API call only, no Terraform provider resource available)
 
-#resource "kion_project" "project" {
-#  name = "${var.account_name}"
-#  ou_id = data.kion_ou.master_ou.id
+provider "kion" {
+  url = "https://kion.cloud.tamu.edu"
+  apikey = var.apikey
+}
 
+data "kion_ou" "master"{
+ filter {
+   name = "name"
+   values = ["TAMU"]
+   regex = false
+ }
+}
 
+data "kion_user_group" "admins" {
+  filter {
+    name = "name"
+    values = ["admins"]
+    regex = false
+  }
+}
 
+#create user group
+resource "kion_user_group" "new_user_group" {
+  name = "${var.account_name}-admins"
+  idms_id = 2 #Azure AD
+  owner_groups {
+    id = data.kion_user_group.admins.list[0].id 
+  } 
+}
+
+#link user group to Azure AD group
+resource "kion_saml_group_association" "link_to_azuread" {
+  assertion_name = "memberOf"
+  assertion_regex = azuread_group.admins_group.object_id
+  idms_id = 2 #Azure AD
+  update_on_login = true
+  user_group_id = kion_user_group.new_user_group.id
+}
+
+# resource "kion_project_cloud_access_role" {} <-- necessary?
+
+#create project
+resource "kion_project" "new_project" {
+ name = "${var.account_name}"
+ ou_id = data.kion_ou.master.list[0].id
+ permission_scheme_id = 3 # default project permission scheme
+ default_aws_region = "us-east-1"
+ description = "${var.json_data.resource_desc}"
+ owner_user_group_ids {
+    id = kion_user_group.new_user_group.id 
+ }
+ owner_user_group_ids {
+    id = data.kion_user_group.admins.list[0].id 
+ }
+ #work on this next
+ project_funding {
+  amount = 10000 # this amount is temporary; several older accounts list expenditure as '0'
+  start_datecode = "2023-01"
+  funding_source_id = var.funding_source_id
+  end_datecode = "2023-08"
+ }
+}
+
+#should make sure that all accounts associated with master payer are linked to Kion
+resource "null_resource" "link_account_to_kion" {
+  provisioner "local-exec" {
+    command = <<EOT
+      curl -X 'POST' \
+        'https://kion.cloud.tamu.edu/api/v3/payer/1/link-all-accounts' \
+        -H 'Authorization: Bearer ${var.apikey} \
+        -H 'accept: application/json' \
+        -d ''
+      EOT
+
+      #trigger? 
+  }
+}
+
+#link account to project
+resource "null_resource" "link_account_to_project" {
+  depends_on = [kion_project.new_project, null_resource.link_account_to_kion]
+  provisioner "local-exec" {
+    command = <<EOT
+      curl -X 'POST' \
+        'https://kion.cloud.tamu.edu/api/v3/account?account-type=aws' \
+        -H 'Authorization: Bearer ${var.apikey} \
+        -H 'accept: application/json' \
+        -H 'Content-Type: application/json' \
+        -d '{ 
+        "account_email": "${var.email}",
+        "account_name": "${var.account_name}",
+        "account_number": "${aws_organizations_account.account.id}",
+        "account_type_id": 1,
+        "include_linked_account_spend": true,
+        "linked_aws_account_number": "",
+        "linked_role": ${aws_organizations_account.account.role_name},
+        "payer_id": 1,
+        "project_id": ${kion_project.new_project.id},
+        "skip_access_checking": false,
+        "start_datecode": "2023-01",
+        "use_org_account_info": false
+        }'
+      EOT
+  }
+}

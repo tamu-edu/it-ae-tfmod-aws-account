@@ -1,5 +1,7 @@
 # passed from account.tf
 
+variable "funding_source_id" {}
+variable "apikey" {}
 variable "json_data" {}
 variable "account_name" {}
 variable "owner_data" {}
