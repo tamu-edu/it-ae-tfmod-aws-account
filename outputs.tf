@@ -2,7 +2,7 @@
 # Outputs
 ######################
 
-output "account" {
+output "org_account" {
   value = aws_organizations_account.account
 }
 
