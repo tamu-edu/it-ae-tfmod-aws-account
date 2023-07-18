@@ -12,4 +12,3 @@ variable "expenditure" { type = string }
 variable "data_classification" { type = string }
 variable "data_classification_artifact_url" { type = string }
 variable "request_id" { type = string }
-variable "funding_source_id" { type = string }
