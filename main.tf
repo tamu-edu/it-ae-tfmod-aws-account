@@ -9,7 +9,7 @@ terraform {
       version = "~> 2.0"
     }
     kion = {
-      source = "github.com/kionsoftware/kion"
+      source  = "kionsoftware/kion"
       version = "0.3.3"
     }
   }
